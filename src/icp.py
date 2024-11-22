@@ -1,13 +1,22 @@
 import numpy as np
-import sys
+import os
 import open3d as o3d
-import argparse
+from typing import TypedDict
+
+
+class IcpConfig(TypedDict):
+    source: str
+    target: str
+    max_iter: int
+    tol: float
+    std_ratio: float
+    nb_neighbors: int
+    threshold: float
 
 
 def read_ply(file_path):
     """Read a PLY file and return a point cloud."""
-    pcd = o3d.io.read_point_cloud(file_path)
-    return pcd
+    return o3d.io.read_point_cloud(file_path)
 
 
 def write_ply(file_path, pcd):
@@ -30,7 +39,7 @@ def remove_outliers(pcd, nb_neighbors=20, std_ratio=2.0):
     return pcd.select_by_index(ind)
 
 
-def icp(source_pcd, target_pcd, max_iterations=50, tolerance=1e-6, threshold=1.0):
+def _icp(source_pcd, target_pcd, max_iterations=50, tolerance=1e-6, threshold=1.0):
     """Perform Iterative Closest Point algorithm using Open3D."""
     transformation = np.eye(4)  # Initial transformation matrix
 
@@ -48,17 +57,17 @@ def icp(source_pcd, target_pcd, max_iterations=50, tolerance=1e-6, threshold=1.0
     return reg_p2p.transformation
 
 
-def main(args):
+def run_icp(args: IcpConfig):
     # Read source and target point clouds
-    source_pcd = read_ply(args.source)
-    target_pcd = read_ply(args.target)
+    source_pcd = read_ply(args["source"])
+    target_pcd = read_ply(args["target"])
 
     print("Source point cloud:", source_pcd)
     print("Target point cloud:", target_pcd)
 
     # Remove outliers
-    source_pcd = remove_outliers(source_pcd, args.nb_neighbors, args.std_ratio)
-    target_pcd = remove_outliers(target_pcd, args.nb_neighbors, args.std_ratio)
+    source_pcd = remove_outliers(source_pcd, args["nb_neighbors"], args["std_ratio"])
+    target_pcd = remove_outliers(target_pcd, args["nb_neighbors"], args["std_ratio"])
 
     print("Source point cloud after removing outliers:", source_pcd)
     print("Target point cloud after removing outliers:", target_pcd)
@@ -71,59 +80,18 @@ def main(args):
     # Scale the source point cloud
     scale_point_cloud(source_pcd, scale_factor)
 
-    # Run ICP algorithm
-    final_transformation = icp(
-        source_pcd, target_pcd, args.max_iter, args.tol, args.threshold
+    final_transformation = _icp(
+        source_pcd, target_pcd, args["max_iter"], args["tol"], args["threshold"]
     )
 
     # Apply final transformation to source points
     source_pcd.transform(final_transformation)
 
-    # Merge the transformed source point cloud with the target point cloud
-    merged_pcd = source_pcd + target_pcd
+    # Merge and save
+    output_path = os.path.join("output", "merged.ply")
+    write_ply(output_path, source_pcd + target_pcd)
 
-    # Write merged point clouds to a new PLY file
-    write_ply("merged.ply", merged_pcd)
-
-    # Optionally, visualize the aligned point clouds
+    # Visualize the aligned point clouds
     source_pcd.paint_uniform_color([1, 0, 0])  # Red
     target_pcd.paint_uniform_color([0, 1, 0])  # Green
     o3d.visualization.draw_geometries([source_pcd, target_pcd])
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Align two point clouds using ICP with optional outlier removal and scaling."
-    )
-    parser.add_argument("source", type=str, help="Path to the source PLY file.")
-    parser.add_argument("target", type=str, help="Path to the target PLY file.")
-    parser.add_argument(
-        "-i",
-        "--max_iter",
-        type=int,
-        default=50,
-        help="Maximum number of ICP iterations.",
-    )
-    parser.add_argument(
-        "-t", "--tol", type=float, default=1e-6, help="Tolerance for ICP convergence."
-    )
-    parser.add_argument(
-        "-s",
-        "--std_ratio",
-        type=float,
-        default=2.0,
-        help="Standard deviation ratio for statistical outlier removal.",
-    )
-    parser.add_argument(
-        "-n",
-        "--nb_neighbors",
-        type=int,
-        default=20,
-        help="Number of neighbors to analyze for each point in statistical outlier removal.",
-    )
-    parser.add_argument(
-        "-d", "--threshold", type=float, default=1.0, help="Distance threshold for ICP."
-    )
-
-    args = parser.parse_args()
-    main(args)
