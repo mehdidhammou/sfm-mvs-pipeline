@@ -393,7 +393,7 @@ def get_argparser():
         "output_dir", type=str, help="Directory to save the output point clouds."
     )
     parser.add_argument(
-        "-d",
+        "-s",
         "--downscale_factor",
         type=int,
         default=2,
