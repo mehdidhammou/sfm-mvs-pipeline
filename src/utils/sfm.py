@@ -6,13 +6,14 @@ import numpy as np
 from scipy.optimize import least_squares
 from tomlkit import boolean
 from tqdm import tqdm
-
-from image_loader import ImageLoader
+from glob import glob
+from .image_loader import ImageLoader
 
 
 class Sfm:
-    def __init__(self, img_loader: ImageLoader) -> None:
+    def __init__(self, img_loader: ImageLoader, output_dir: str) -> None:
         self.img_loader = img_loader
+        self.output_dir = output_dir
 
     def triangulation(
         self, point_2d_1, point_2d_2, projection_matrix_1, projection_matrix_2
@@ -116,7 +117,7 @@ class Sfm:
             values_corrected[0:12].reshape((3, 4)),
         )
 
-    def to_ply(self, output_dir, point_cloud, colors) -> None:
+    def to_ply(self, point_cloud, colors) -> None:
         """
         Generates a .ply file to visualize the point cloud.
 
@@ -138,64 +139,34 @@ class Sfm:
             vertices = vertices[distances < threshold]
 
             # Prepare header for .ply file
-            header = f"""ply
-    format ascii 1.0
-    element vertex {len(vertices)}
-    property float x
-    property float y
-    property float z
-    property uchar blue
-    property uchar green
-    property uchar red
-    end_header
-    """
+            header_lines = [
+                "ply",
+                "format ascii 1.0",
+                f"element vertex {len(vertices)}",
+                "property float x",
+                "property float y",
+                "property float z",
+                "property uchar blue",
+                "property uchar green",
+                "property uchar red",
+                "end_header",
+            ]
+
+            header = "\n".join(header_lines)
 
             # Generate output file path
-            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(self.output_dir, exist_ok=True)
             sub_dir = os.path.basename(self.img_loader.img_dir)
-            file_path = os.path.join(output_dir, f"{sub_dir}.ply")
+            file_path = os.path.join(self.output_dir, f"{sub_dir}.ply")
 
             # Write to .ply file
             with open(file_path, "w") as file:
-                file.write(header)
+                file.write(header + "\n")  # Ensure a newline after the header
                 np.savetxt(file, vertices, fmt="%f %f %f %d %d %d")
+                print(f"Successfully generated .ply file at: {file_path}")
 
         except Exception as e:
             raise RuntimeError(f"Failed to generate .ply file: {e}")
-
-    def to_ply_dep(self, path, point_cloud, colors) -> None:
-        """
-        Generates the .ply which can be used to open the point cloud
-        """
-        out_points = point_cloud.reshape(-1, 3) * 200
-        out_colors = colors.reshape(-1, 3)
-        print(out_colors.shape, out_points.shape)
-        verts = np.hstack([out_points, out_colors])
-
-        mean = np.mean(verts[:, :3], axis=0)
-        scaled_verts = verts[:, :3] - mean
-        dist = np.sqrt(
-            scaled_verts[:, 0] ** 2 + scaled_verts[:, 1] ** 2 + scaled_verts[:, 2] ** 2
-        )
-        indx = np.where(dist < np.mean(dist) + 300)
-        verts = verts[indx]
-        ply_header = """ply
-            format ascii 1.0
-            element vertex %(vert_num)d
-            property float x
-            property float y
-            property float z
-            property uchar blue
-            property uchar green
-            property uchar red
-            end_header
-            """
-        with open(
-            path + "\\res\\" + self.img_loader.image_list[0].split("\\")[-2] + ".ply",
-            "w",
-        ) as f:
-            f.write(ply_header % dict(vert_num=len(verts)))
-            np.savetxt(f, verts, "%f %f %f %d %d %d")
 
     def common_points(self, image_points_1, image_points_2, image_points_3) -> tuple:
         """
@@ -228,7 +199,7 @@ class Sfm:
         return keypoints(features) of image1 and image2
         """
 
-        sift = cv2.xfeatures2d.SIFT_create()
+        sift = cv2.SIFT.create()
         key_points_0, desc_0 = sift.detectAndCompute(
             cv2.cvtColor(image_0, cv2.COLOR_BGR2GRAY), None
         )
@@ -248,7 +219,7 @@ class Sfm:
         )
 
     def run_sfm(self, enable_bundle_adjustment: boolean = False):
-        cv2.namedWindow("image", cv2.WINDOW_NORMAL)
+        # cv2.namedWindow("image", cv2.WINDOW_NORMAL)
         pose_array = self.img_loader.K.ravel()
         transform_matrix_0 = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
         transform_matrix_1 = np.empty((3, 4))
@@ -332,6 +303,9 @@ class Sfm:
             cm_points_0, cm_points_1, cm_mask_0, cm_mask_1 = self.common_points(
                 feature_1, features_cur, features_2
             )
+
+            print("Common Points: ", cm_points_0.shape, cm_points_1.shape)
+
             cm_points_2 = features_2[cm_points_1]
             cm_points_cur = features_cur[cm_points_1]
 
@@ -405,29 +379,34 @@ class Sfm:
             feature_1 = np.copy(features_2)
             pose_1 = np.copy(pose_2)
             folder_name = os.path.basename(self.img_loader.img_dir)
-            cv2.imshow(folder_name, image_2)
+            # cv2.imshow(folder_name, image_2)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
         cv2.destroyAllWindows()
 
-        print("Printing to .ply file")
         print(total_points.shape, total_colors.shape)
-        self.to_ply(self.img_loader.img_dir, total_points, total_colors)
-        print("Completed Exiting ...")
-        folder_name = os.path.basename(self.img_loader.img_dir)
-        path = os.path.join(
-            self.img_loader.img_dir, "res", f"{folder_name}_pose_array.csv"
-        )
-        np.savetxt(
-            path,
-            pose_array,
-            delimiter="\n",
-        )
+        self.to_ply(total_points, total_colors)
+
+
+def main():
+    output_dir = "point_clouds"
+    datasets = glob(os.path.join("datasets", "*"))
+    for idx, dataset in enumerate(datasets):
+        print(f"dataset : {idx + 1}, path : {dataset}")
+        K_path = os.path.join(dataset, "K.npy")
+        img_loader = ImageLoader(dataset, K_path)
+        sfm = Sfm(img_loader, output_dir)
+        sfm.run_sfm()
 
 
 if __name__ == "__main__":
-    dataset_path = os.path.join(os.getcwd(), "dataset", "wall-1")
-    K_path = os.path.join(dataset_path, "K.npy")
-    img_loader = ImageLoader(dataset_path, K_path)
-    sfm = Sfm(img_loader)
-    sfm.run_sfm()
+    main()
+
+# if __name__ == "__main__":
+#     output_dir = "point_clouds"
+#     datasets = glob(os.path.join("datasets", "*"))
+
+#     K_path = os.path.join(datasets[3], "K.npy")
+#     img_loader = ImageLoader(datasets[1], K_path)
+#     sfm = Sfm(img_loader, output_dir)
+#     sfm.run_sfm()
