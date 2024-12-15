@@ -1,7 +1,3 @@
-Collecting workspace information
-
-# README
-
 This project performs Structure from Motion (SfM) and Iterative Closest Point (ICP) alignment on a series of images to generate and merge point clouds.
 
 ## Requirements
