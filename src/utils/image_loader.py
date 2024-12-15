@@ -4,7 +4,7 @@ import cv2
 
 
 class ImageLoader:
-    def __init__(self, img_dir: str, K_path: str, downscale_factor: float = 2.0):
+    def __init__(self, img_dir: str, K_path: str, downscale_factor: int):
         self.img_dir = img_dir
         self.factor = downscale_factor
 
@@ -29,7 +29,6 @@ class ImageLoader:
 
     def downscale_image(self, image) -> np.ndarray:
         """Downscale the image using pyrDown."""
-        num_scales = int(np.log2(self.factor))
-        for _ in range(num_scales):
+        for _ in range(int(self.factor)):
             image = cv2.pyrDown(image)
         return image

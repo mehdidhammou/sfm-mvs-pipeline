@@ -1,13 +1,15 @@
+import argparse
 import os
+from glob import glob
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
+import open3d as o3d
 from scipy.optimize import least_squares
 from tomlkit import boolean
 from tqdm import tqdm
-from glob import glob
-from .image_loader import ImageLoader
+
+from utils.image_loader import ImageLoader
 
 
 class Sfm:
@@ -117,53 +119,44 @@ class Sfm:
             values_corrected[0:12].reshape((3, 4)),
         )
 
-    def to_ply(self, point_cloud, colors) -> None:
+    def to_ply(self, point_cloud: np.ndarray, colors: np.ndarray) -> None:
         """
-        Generates a .ply file to visualize the point cloud.
+        Generates a .ply file to visualize the point cloud using Open3D.
 
         Args:
-            output_dir (str): Directory where the .ply file will be saved.
             point_cloud (np.ndarray): 3D point cloud data (Nx3).
             colors (np.ndarray): Corresponding RGB color data (Nx3).
         """
         try:
-            # Scale and combine point cloud and color data
+            # Scale the point cloud data
             scaled_points = point_cloud.reshape(-1, 3) * 200
+
+            # Reshape color data
             reshaped_colors = colors.reshape(-1, 3)
-            vertices = np.hstack([scaled_points, reshaped_colors])
 
-            # Filter vertices based on distance from mean
-            mean_position = np.mean(vertices[:, :3], axis=0)
-            distances = np.linalg.norm(vertices[:, :3] - mean_position, axis=1)
+            # Create Open3D point cloud object
+            pcd = o3d.geometry.PointCloud()
+
+            # Set the points and colors for the point cloud
+            pcd.points = o3d.utility.Vector3dVector(scaled_points)
+            pcd.colors = o3d.utility.Vector3dVector(
+                reshaped_colors / 255.0
+            )  # Normalize colors to [0, 1]
+
+            # Filter out points based on distance from the mean
+            mean_position = np.mean(scaled_points, axis=0)
+            distances = np.linalg.norm(scaled_points - mean_position, axis=1)
             threshold = np.mean(distances) + 300
-            vertices = vertices[distances < threshold]
-
-            # Prepare header for .ply file
-            header_lines = [
-                "ply",
-                "format ascii 1.0",
-                f"element vertex {len(vertices)}",
-                "property float x",
-                "property float y",
-                "property float z",
-                "property uchar blue",
-                "property uchar green",
-                "property uchar red",
-                "end_header",
-            ]
-
-            header = "\n".join(header_lines)
+            pcd = pcd.select_by_index(np.where(distances < threshold)[0])
 
             # Generate output file path
             os.makedirs(self.output_dir, exist_ok=True)
             sub_dir = os.path.basename(self.img_loader.img_dir)
             file_path = os.path.join(self.output_dir, f"{sub_dir}.ply")
 
-            # Write to .ply file
-            with open(file_path, "w") as file:
-                file.write(header + "\n")  # Ensure a newline after the header
-                np.savetxt(file, vertices, fmt="%f %f %f %d %d %d")
-                print(f"Successfully generated .ply file at: {file_path}")
+            # Write point cloud to .ply file
+            o3d.io.write_point_cloud(file_path, pcd)
+            print(f"Successfully generated .ply file at: {file_path}")
 
         except Exception as e:
             raise RuntimeError(f"Failed to generate .ply file: {e}")
@@ -370,8 +363,6 @@ class Sfm:
 
             transform_matrix_0 = np.copy(transform_matrix_1)
             pose_0 = np.copy(pose_1)
-            plt.scatter(i, error)
-            plt.pause(0.05)
 
             image_0 = np.copy(image_1)
             image_1 = np.copy(image_2)
@@ -388,25 +379,54 @@ class Sfm:
         self.to_ply(total_points, total_colors)
 
 
-def main():
-    output_dir = "point_clouds"
-    datasets = glob(os.path.join("datasets", "*"))
-    for idx, dataset in enumerate(datasets):
-        print(f"dataset : {idx + 1}, path : {dataset}")
-        K_path = os.path.join(dataset, "K.npy")
-        img_loader = ImageLoader(dataset, K_path)
-        sfm = Sfm(img_loader, output_dir)
-        sfm.run_sfm()
+def get_argparser():
+    """Sets up the argument parser."""
+    parser = argparse.ArgumentParser(
+        description="Run Structure from Motion (SfM) on datasets."
+    )
+    parser.add_argument(
+        "datasets_dir",
+        type=str,
+        help="Directory containing subdirectories with datasets.",
+    )
+    parser.add_argument(
+        "output_dir", type=str, help="Directory to save the output point clouds."
+    )
+    parser.add_argument(
+        "-d",
+        "--downscale_factor",
+        type=int,
+        default=2,
+        help="Downscale factor for image loading (default is 1.0, no downscaling).",
+    )
+    return parser
+
+
+def check_k_matrix_exists(k_path):
+    """Check if K.npy exists."""
+    if not os.path.exists(k_path):
+        raise FileNotFoundError(f"Calibration matrix 'K.npy' not found at: {k_path}")
 
 
 if __name__ == "__main__":
-    main()
+    args = get_argparser().parse_args()
 
-# if __name__ == "__main__":
-#     output_dir = "point_clouds"
-#     datasets = glob(os.path.join("datasets", "*"))
+    # Ensure the output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
 
-#     K_path = os.path.join(datasets[3], "K.npy")
-#     img_loader = ImageLoader(datasets[1], K_path)
-#     sfm = Sfm(img_loader, output_dir)
-#     sfm.run_sfm()
+    # Get datasets from the specified 'datasets_dir' folder
+    datasets = glob(os.path.join(args.datasets_dir, "*"))
+
+    for idx, dataset in enumerate(datasets):
+        K_path = os.path.join(dataset, "K.npy")
+        check_k_matrix_exists(K_path)
+        print(f"Dataset {idx + 1}, path: {dataset}, K matrix: {K_path}")
+
+        # Load the ImageLoader with the downscale factor (optional)
+        img_loader = ImageLoader(
+            dataset, K_path, downscale_factor=args.downscale_factor
+        )
+
+        # Initialize and run the SfM process
+        sfm = Sfm(img_loader, args.output_dir)
+        sfm.run_sfm()
