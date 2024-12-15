@@ -145,11 +145,6 @@ def _icp(source_pcd, target_pcd, max_iterations=50, tolerance=1e-6, threshold=1.
     return reg_p2p.transformation
 
 
-import os
-import open3d as o3d
-import numpy as np
-
-
 def run_icp(args: IcpConfig):
     # Read source and target point clouds
     source_pcd = read_ply(args["source"])
@@ -164,6 +159,16 @@ def run_icp(args: IcpConfig):
 
     print("Source point cloud after removing outliers:", source_pcd)
     print("Target point cloud after removing outliers:", target_pcd)
+
+    # Compute normals for both point clouds (needed for point-to-plane ICP)
+    source_pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
+    )
+    target_pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
+    )
+
+    print("Normals computed for source and target point clouds.")
 
     # Compute scale factors
     norm_source = np.linalg.norm(np.asarray(source_pcd.points))
