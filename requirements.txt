@@ -1,0 +1,8 @@
+open3d
+opencv-contrib-python
+opencv-python
+tomlkit
+tqdm
+numpy
+scipy
+matplotlib

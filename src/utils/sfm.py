@@ -1,3 +1,5 @@
+import os
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,18 +11,15 @@ from image_loader import ImageLoader
 
 
 class Sfm:
-    def __init__(self, img_dir: str, downscale_factor: float = 2.0) -> None:
-        """
-        Initialise and Sfm object.
-        """
-        self.img_obj = ImageLoader(img_dir, downscale_factor)
+    def __init__(self, img_loader: ImageLoader) -> None:
+        self.img_loader = img_loader
 
     def triangulation(
         self, point_2d_1, point_2d_2, projection_matrix_1, projection_matrix_2
     ) -> tuple:
         """
         Triangulates 3d points from 2d vectors and projection matrices
-        returns projection matrix of first camera, projection matrix of second camera, point cloud
+        returns projection matrix of first camera, projection matrix of second camera, and the point cloud
         """
         pt_cloud = cv2.triangulatePoints(
             point_2d_1, point_2d_2, projection_matrix_1.T, projection_matrix_2.T
@@ -117,7 +116,54 @@ class Sfm:
             values_corrected[0:12].reshape((3, 4)),
         )
 
-    def to_ply(self, path, point_cloud, colors) -> None:
+    def to_ply(self, output_dir, point_cloud, colors) -> None:
+        """
+        Generates a .ply file to visualize the point cloud.
+
+        Args:
+            output_dir (str): Directory where the .ply file will be saved.
+            point_cloud (np.ndarray): 3D point cloud data (Nx3).
+            colors (np.ndarray): Corresponding RGB color data (Nx3).
+        """
+        try:
+            # Scale and combine point cloud and color data
+            scaled_points = point_cloud.reshape(-1, 3) * 200
+            reshaped_colors = colors.reshape(-1, 3)
+            vertices = np.hstack([scaled_points, reshaped_colors])
+
+            # Filter vertices based on distance from mean
+            mean_position = np.mean(vertices[:, :3], axis=0)
+            distances = np.linalg.norm(vertices[:, :3] - mean_position, axis=1)
+            threshold = np.mean(distances) + 300
+            vertices = vertices[distances < threshold]
+
+            # Prepare header for .ply file
+            header = f"""ply
+    format ascii 1.0
+    element vertex {len(vertices)}
+    property float x
+    property float y
+    property float z
+    property uchar blue
+    property uchar green
+    property uchar red
+    end_header
+    """
+
+            # Generate output file path
+            os.makedirs(output_dir, exist_ok=True)
+            sub_dir = os.path.basename(self.img_loader.img_dir)
+            file_path = os.path.join(output_dir, f"{sub_dir}.ply")
+
+            # Write to .ply file
+            with open(file_path, "w") as file:
+                file.write(header)
+                np.savetxt(file, vertices, fmt="%f %f %f %d %d %d")
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to generate .ply file: {e}")
+
+    def to_ply_dep(self, path, point_cloud, colors) -> None:
         """
         Generates the .ply which can be used to open the point cloud
         """
@@ -145,7 +191,8 @@ class Sfm:
             end_header
             """
         with open(
-            path + "\\res\\" + self.img_obj.image_list[0].split("\\")[-2] + ".ply", "w"
+            path + "\\res\\" + self.img_loader.image_list[0].split("\\")[-2] + ".ply",
+            "w",
         ) as f:
             f.write(ply_header % dict(vert_num=len(verts)))
             np.savetxt(f, verts, "%f %f %f %d %d %d")
@@ -200,19 +247,23 @@ class Sfm:
             [key_points_1[m.trainIdx].pt for m in feature]
         )
 
-    def __call__(self, enable_bundle_adjustment: boolean = False):
+    def run_sfm(self, enable_bundle_adjustment: boolean = False):
         cv2.namedWindow("image", cv2.WINDOW_NORMAL)
-        pose_array = self.img_obj.K.ravel()
+        pose_array = self.img_loader.K.ravel()
         transform_matrix_0 = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
         transform_matrix_1 = np.empty((3, 4))
 
-        pose_0 = np.matmul(self.img_obj.K, transform_matrix_0)
+        pose_0 = np.matmul(self.img_loader.K, transform_matrix_0)
         pose_1 = np.empty((3, 4))
         total_points = np.zeros((1, 3))
         total_colors = np.zeros((1, 3))
 
-        image_0 = self.img_obj.downscale_image(cv2.imread(self.img_obj.image_list[0]))
-        image_1 = self.img_obj.downscale_image(cv2.imread(self.img_obj.image_list[1]))
+        image_0 = self.img_loader.downscale_image(
+            cv2.imread(self.img_loader.image_list[0])
+        )
+        image_1 = self.img_loader.downscale_image(
+            cv2.imread(self.img_loader.image_list[1])
+        )
 
         feature_0, feature_1 = self.find_features(image_0, image_1)
 
@@ -220,7 +271,7 @@ class Sfm:
         essential_matrix, em_mask = cv2.findEssentialMat(
             feature_0,
             feature_1,
-            self.img_obj.K,
+            self.img_loader.K,
             method=cv2.RANSAC,
             prob=0.999,
             threshold=0.4,
@@ -230,7 +281,7 @@ class Sfm:
         feature_1 = feature_1[em_mask.ravel() == 1]
 
         _, rot_matrix, tran_matrix, em_mask = cv2.recoverPose(
-            essential_matrix, feature_0, feature_1, self.img_obj.K
+            essential_matrix, feature_0, feature_1, self.img_loader.K
         )
         feature_0 = feature_0[em_mask.ravel() > 0]
         feature_1 = feature_1[em_mask.ravel() > 0]
@@ -239,34 +290,34 @@ class Sfm:
             transform_matrix_0[:3, :3], tran_matrix.ravel()
         )
 
-        pose_1 = np.matmul(self.img_obj.K, transform_matrix_1)
+        pose_1 = np.matmul(self.img_loader.K, transform_matrix_1)
 
         feature_0, feature_1, points_3d = self.triangulation(
             pose_0, pose_1, feature_0, feature_1
         )
         error, points_3d = self.reprojection_error(
-            points_3d, feature_1, transform_matrix_1, self.img_obj.K, homogenity=1
+            points_3d, feature_1, transform_matrix_1, self.img_loader.K, homogenity=1
         )
         # ideally error < 1
         print("REPROJECTION ERROR: ", error)
         _, _, feature_1, points_3d, _ = self.PnP(
             points_3d,
             feature_1,
-            self.img_obj.K,
+            self.img_loader.K,
             np.zeros((5, 1), dtype=np.float32),
             feature_0,
             initial=1,
         )
 
-        total_images = len(self.img_obj.image_list) - 2
+        total_images = len(self.img_loader.image_list) - 2
         pose_array = np.hstack(
             (np.hstack((pose_array, pose_0.ravel())), pose_1.ravel())
         )
 
         threshold = 0.5
         for i in tqdm(range(total_images)):
-            image_2 = self.img_obj.downscale_image(
-                cv2.imread(self.img_obj.image_list[i + 2])
+            image_2 = self.img_loader.downscale_image(
+                cv2.imread(self.img_loader.image_list[i + 2])
             )
             features_cur, features_2 = self.find_features(image_1, image_2)
 
@@ -287,37 +338,49 @@ class Sfm:
             rot_matrix, tran_matrix, cm_points_2, points_3d, cm_points_cur = self.PnP(
                 points_3d[cm_points_0],
                 cm_points_2,
-                self.img_obj.K,
+                self.img_loader.K,
                 np.zeros((5, 1), dtype=np.float32),
                 cm_points_cur,
                 initial=0,
             )
             transform_matrix_1 = np.hstack((rot_matrix, tran_matrix))
-            pose_2 = np.matmul(self.img_obj.K, transform_matrix_1)
+            pose_2 = np.matmul(self.img_loader.K, transform_matrix_1)
 
             error, points_3d = self.reprojection_error(
-                points_3d, cm_points_2, transform_matrix_1, self.img_obj.K, homogenity=0
+                points_3d,
+                cm_points_2,
+                transform_matrix_1,
+                self.img_loader.K,
+                homogenity=0,
             )
 
             cm_mask_0, cm_mask_1, points_3d = self.triangulation(
                 pose_1, pose_2, cm_mask_0, cm_mask_1
             )
             error, points_3d = self.reprojection_error(
-                points_3d, cm_mask_1, transform_matrix_1, self.img_obj.K, homogenity=1
+                points_3d,
+                cm_mask_1,
+                transform_matrix_1,
+                self.img_loader.K,
+                homogenity=1,
             )
             print("Reprojection Error: ", error)
             pose_array = np.hstack((pose_array, pose_2.ravel()))
             # takes a long time to run
             if enable_bundle_adjustment:
                 points_3d, cm_mask_1, transform_matrix_1 = self.bundle_adjustment(
-                    points_3d, cm_mask_1, transform_matrix_1, self.img_obj.K, threshold
+                    points_3d,
+                    cm_mask_1,
+                    transform_matrix_1,
+                    self.img_loader.K,
+                    threshold,
                 )
                 pose_2 = np.matmul(self.img_obj.K, transform_matrix_1)
                 error, points_3d = self.reprojection_error(
                     points_3d,
                     cm_mask_1,
                     transform_matrix_1,
-                    self.img_obj.K,
+                    self.img_loader.K,
                     homogenity=0,
                 )
                 print("Bundle Adjusted error: ", error)
@@ -341,25 +404,30 @@ class Sfm:
             feature_0 = np.copy(features_cur)
             feature_1 = np.copy(features_2)
             pose_1 = np.copy(pose_2)
-            cv2.imshow(self.img_obj.image_list[0].split("\\")[-2], image_2)
+            folder_name = os.path.basename(self.img_loader.img_dir)
+            cv2.imshow(folder_name, image_2)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
         cv2.destroyAllWindows()
 
         print("Printing to .ply file")
         print(total_points.shape, total_colors.shape)
-        self.to_ply(self.img_obj.path, total_points, total_colors)
+        self.to_ply(self.img_loader.img_dir, total_points, total_colors)
         print("Completed Exiting ...")
+        folder_name = os.path.basename(self.img_loader.img_dir)
+        path = os.path.join(
+            self.img_loader.img_dir, "res", f"{folder_name}_pose_array.csv"
+        )
         np.savetxt(
-            self.img_obj.path
-            + "\\res\\"
-            + self.img_obj.image_list[0].split("\\")[-2]
-            + "_pose_array.csv",
+            path,
             pose_array,
             delimiter="\n",
         )
 
 
 if __name__ == "__main__":
-    sfm = Sfm("Datasets\\Herz-Jesus-P8")
-    sfm()
+    dataset_path = os.path.join(os.getcwd(), "dataset", "wall-1")
+    K_path = os.path.join(dataset_path, "K.npy")
+    img_loader = ImageLoader(dataset_path, K_path)
+    sfm = Sfm(img_loader)
+    sfm.run_sfm()

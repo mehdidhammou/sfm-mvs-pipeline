@@ -1,5 +1,5 @@
 import argparse
-from icp import run_icp
+from src.utils.icp import run_icp
 
 
 def get_argparser() -> argparse.Namespace:

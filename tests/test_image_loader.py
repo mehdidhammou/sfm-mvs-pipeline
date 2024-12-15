@@ -3,7 +3,7 @@ import os
 import numpy as np
 import cv2
 from tempfile import TemporaryDirectory
-from src import ImageLoader
+from src.utils import ImageLoader
 
 
 class TestImageLoader(unittest.TestCase):
